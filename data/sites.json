@@ -1,0 +1,7 @@
+{
+  "mooreroofing": {
+    "businessName": "Moore Roofing & Designs Inc.",
+    "ownerEmail": "owner@example.com",
+    "formTypes": ["contact", "quote"]
+  }
+}
