@@ -2,6 +2,9 @@
   "mooreroofing": {
     "businessName": "Moore Roofing & Designs Inc.",
     "ownerEmail": "publishing@zing-work.com",
-    "formTypes": ["contact", "quote"]
+    "formTypes": [
+      "contact",
+      "quote"
+    ]
   }
 }
