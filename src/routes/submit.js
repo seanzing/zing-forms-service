@@ -28,6 +28,19 @@ router.post('/', rateLimit, (req, res, next) => {
       return res.status(404).json({ error: 'Unknown site.' });
     }
 
+    // If no owner email configured, log and accept silently — don't send to a wrong address
+    if (!site.ownerEmail) {
+      console.log(`[SUBMIT] result=no_owner_email site_id=${site_id} — submission logged only`);
+      try {
+        fs.appendFileSync(logFile, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          site_id, name, phone: phone || null, email: email || null,
+          form_type, ip: req.ip, emailSent: false, reason: 'no_owner_email'
+        }) + '\n');
+      } catch (_) {}
+      return res.json({ success: true, message: "Thanks! We'll be in touch soon." });
+    }
+
     const emailSent = await sendEmail({
       site,
       site_id,
