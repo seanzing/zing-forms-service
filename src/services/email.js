@@ -2,7 +2,7 @@ const axios = require('axios');
 
 async function sendEmail({ site, site_id, name, email, phone, message, form_type }) {
   const apiKey = process.env.SMTP2GO_API_KEY;
-  const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zingmigration.com';
+  const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zing-work.com';
   const fromName = process.env.SMTP2GO_FROM_NAME || 'ZING Website Forms';
 
   const subject = `New ${form_type} from ${name} — ${site.businessName}`;
