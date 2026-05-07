@@ -10,6 +10,12 @@ const path = require('path');
 const logsDir = path.join(__dirname, '../../logs');
 const logFile = path.join(logsDir, 'submissions.jsonl');
 
+// Detect whether this is a traditional HTML form POST (not JSON/fetch)
+function isTraditionalPost(req) {
+  const ct = req.headers['content-type'] || '';
+  return ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data');
+}
+
 router.post('/', rateLimit, (req, res, next) => {
   const { site_id, name, ip } = {
     site_id: req.body.site_id,
@@ -19,6 +25,7 @@ router.post('/', rateLimit, (req, res, next) => {
   console.log(`[SUBMIT] site_id=${site_id} ip=${ip} time=${new Date().toISOString()}`);
   next();
 }, checkHoneypot, validateSubmission, async (req, res) => {
+  const traditional = isTraditionalPost(req);
   try {
     const { site_id, name, email, phone, message, form_type = 'contact' } = req.body;
 
@@ -70,13 +77,25 @@ router.post('/', rateLimit, (req, res, next) => {
 
     if (!emailSent) {
       console.log(`[SUBMIT] result=email_failed site_id=${site_id}`);
+      if (traditional) {
+        const ref = req.headers.referer || '/';
+        return res.redirect(`${ref}${ref.includes('?') ? '&' : '?'}form=error`);
+      }
       return res.status(500).json({ error: "Failed to send message. Please try calling us directly." });
     }
 
     console.log(`[SUBMIT] result=success site_id=${site_id}`);
+    if (traditional) {
+      const ref = req.headers.referer || '/';
+      return res.redirect(`${ref}${ref.includes('?') ? '&' : '?'}form=sent`);
+    }
     res.json({ success: true, message: "Thanks! We'll be in touch soon." });
   } catch (err) {
     console.error('[SUBMIT] Unexpected error:', err);
+    if (isTraditionalPost(req)) {
+      const ref = req.headers.referer || '/';
+      return res.redirect(`${ref}${ref.includes('?') ? '&' : '?'}form=error`);
+    }
     res.status(500).json({ error: "Failed to send message. Please try calling us directly." });
   }
 });
