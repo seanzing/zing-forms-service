@@ -6,12 +6,43 @@ function checkHoneypot(req, res, next) {
   next();
 }
 
+function normalizeDudaFields(body) {
+  // Duda forms use dmform-N fields with label-dmform-N companions that describe them.
+  // E.g. name="dmform-0" + name="label-dmform-0" value="FIRST NAME"
+  // Map label → standard field names.
+  const LABEL_MAP = {
+    'first name': 'first_name', 'firstname': 'first_name',
+    'last name': 'last_name', 'lastname': 'last_name',
+    'full name': 'full_name', 'name': 'full_name', 'your name': 'full_name',
+    'email': 'email', 'email address': 'email', 'e-mail': 'email',
+    'phone': 'phone', 'phone number': 'phone', 'telephone': 'phone', 'mobile': 'phone', 'cell': 'phone',
+    'message': 'message', 'comments': 'message', 'comment': 'message',
+    'notes': 'message', 'how can we help': 'message', 'subject': 'subject',
+  };
+
+  // Find all dmform-N keys
+  const dmKeys = Object.keys(body).filter(k => /^dmform-\d+$/.test(k));
+  if (dmKeys.length === 0) return; // not a Duda form
+
+  dmKeys.forEach(key => {
+    const idx = key.replace('dmform-', '');
+    const label = (body[`label-${key}`] || '').toLowerCase().trim();
+    const value = body[key];
+    const mapped = LABEL_MAP[label];
+    if (mapped && value) body[mapped] = value;
+  });
+}
+
 function validateSubmission(req, res, next) {
+  // Normalize Duda-style fields first
+  normalizeDudaFields(req.body);
+
   const { site_id, email, phone } = req.body;
 
   // Accept multiple common name field variants
   const name =
     req.body.name ||
+    req.body.full_name ||
     req.body.fullName ||
     req.body.full_name ||
     req.body.your_name ||
