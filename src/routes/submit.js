@@ -29,7 +29,7 @@ router.post('/', rateLimit, (req, res, next) => {
   try {
     const { site_id, name, email, phone, message, form_type = 'contact' } = req.body;
 
-    const site = getSite(site_id);
+    const site = await getSite(site_id);
     if (!site) {
       console.log(`[SUBMIT] result=not_found site_id=${site_id}`);
       return res.status(404).json({ error: 'Unknown site.' });
