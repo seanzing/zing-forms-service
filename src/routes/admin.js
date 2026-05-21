@@ -39,6 +39,23 @@ router.post('/sites/:siteId', (req, res) => {
   }
 });
 
+router.patch('/sites/:siteId', (req, res) => {
+  try {
+    const { siteId } = req.params;
+    const existing = getSiteSync ? null : null; // use getSites()
+    const current = getSites()[siteId];
+    if (!current) {
+      return res.status(404).json({ error: 'Site not found.' });
+    }
+    const updated = { ...current, ...req.body };
+    setSite(siteId, updated);
+    res.json({ success: true, site: updated });
+  } catch (err) {
+    console.error('[ADMIN] Error updating site:', err);
+    res.status(500).json({ error: 'Failed to update site.' });
+  }
+});
+
 router.delete('/sites/:siteId', (req, res) => {
   try {
     const { siteId } = req.params;
