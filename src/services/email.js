@@ -38,9 +38,21 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
     </div>
   `;
 
+  // SMTP2GO's `to:` field parses the entry as an RFC 5322 mailbox. The
+  // 'Display Name <email>' form is valid in theory, but if the display
+  // name contains a comma (e.g. 'You Mess Up, We Clean Up'), SMTP2GO
+  // splits on it and treats the second half as an additional recipient,
+  // which fails the 'no angle-addr' validator with a 400. Diagnosed
+  // 2026-06-29: site_id=lkv363od has been failing for that exact reason
+  // since June 23. Two safe ways to fix: (a) RFC 5322 quote the display
+  // name when it contains a comma, or (b) drop the display name and
+  // ship the bare email. We pick (b) because email clients show the
+  // recipient address verbatim anyway and the customer's businessName
+  // is already in the subject + html body. Less surface area for future
+  // bugs.
   const payload = {
     api_key: apiKey,
-    to: [`${site.businessName} <${site.ownerEmail}>`],
+    to: [site.ownerEmail],
     sender: `${fromName} <${fromEmail}>`,
     subject,
     html_body: htmlBody
