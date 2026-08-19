@@ -67,18 +67,28 @@ router.post('/', rateLimit, (req, res, next) => {
       return res.json({ success: true, message: "Thanks! We'll be in touch soon." });
     }
 
+    // sendEmail now returns { sent, error, attempts } after 2026-08-19
+    // reliability rewrite (30s timeout + retry-on-transient). See
+    // services/email.js header.
     let emailSent = false;
     let emailError = null;
+    let emailAttempts = 0;
     try {
-      emailSent = await sendEmail({
+      const result = await sendEmail({
         site,
         site_id,
         name,
         email,
         phone,
         message,
-        form_type
+        form_type,
       });
+      emailSent = result.sent;
+      emailError = result.error;
+      emailAttempts = result.attempts;
+      if (emailAttempts > 1) {
+        console.log(`[SUBMIT] email required ${emailAttempts} attempt(s) site_id=${site_id} sent=${emailSent}`);
+      }
     } catch (err) {
       emailError = (err && err.message) || String(err);
       console.error('[SUBMIT] sendEmail threw:', emailError);

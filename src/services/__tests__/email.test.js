@@ -22,12 +22,23 @@ const origLoad = Module._load;
 let lastPayload = null;
 let stubResponse = { data: { data: { succeeded: 1 } } };
 let stubError = null;
+// Multi-attempt harness: if set, drives per-attempt responses/errors.
+// Array length determines the max attempts we'll respond to. Absent = use
+// stubResponse/stubError for every attempt.
+let stubSequence = null;
+let callCount = 0;
 
 Module._load = function (request, parent, ...rest) {
   if (request === 'axios' && parent && parent.filename && parent.filename.endsWith('/email.js')) {
     return {
       post: async (_url, payload) => {
         lastPayload = payload;
+        callCount++;
+        if (stubSequence) {
+          const step = stubSequence[Math.min(callCount - 1, stubSequence.length - 1)];
+          if (step.error) throw step.error;
+          return step.response;
+        }
         if (stubError) throw stubError;
         return stubResponse;
       },
@@ -36,6 +47,11 @@ Module._load = function (request, parent, ...rest) {
   return origLoad.apply(this, [request, parent, ...rest]);
 };
 
+// Make retry delays instantaneous for tests so the 3-attempt case doesn't
+// sleep 8 seconds. Must be set BEFORE requiring ../email (constants are
+// read once at module load time).
+process.env.EMAIL_RETRY_DELAYS_MS = '0,0,0';
+
 // Now require the module under test (axios stub will be picked up).
 const { sendEmail } = require('../email');
 
@@ -43,6 +59,8 @@ beforeEach(() => {
   lastPayload = null;
   stubResponse = { data: { data: { succeeded: 1 } } };
   stubError = null;
+  stubSequence = null;
+  callCount = 0;
   process.env.SMTP2GO_API_KEY = 'test-key';
   process.env.SMTP2GO_FROM_EMAIL = 'noreply@zing-work.com';
   process.env.SMTP2GO_FROM_NAME = 'ZING Forms';
@@ -55,7 +73,7 @@ afterEach(() => {
 
 describe('sendEmail — recipient formatting', () => {
   test('to: is an array with the bare email (no display name)', async () => {
-    const ok = await sendEmail({
+    const res = await sendEmail({
       site: {
         businessName: 'Plain Business',
         ownerEmail: 'owner@example.com',
@@ -67,7 +85,9 @@ describe('sendEmail — recipient formatting', () => {
       message: 'Hello',
       form_type: 'contact',
     });
-    assert.equal(ok, true);
+    assert.equal(res.sent, true);
+    assert.equal(res.error, null);
+    assert.equal(res.attempts, 1);
     assert.ok(lastPayload, 'expected payload');
     assert.deepEqual(lastPayload.to, ['owner@example.com']);
     // sanity check: no 'Display Name <email>' format anywhere in to
@@ -76,7 +96,7 @@ describe('sendEmail — recipient formatting', () => {
 
   test('REGRESSION: comma in businessName does not break the to: field', async () => {
     // The lkv363od bug: SMTP2GO 400'd because the comma split the entry.
-    const ok = await sendEmail({
+    const res = await sendEmail({
       site: {
         businessName: 'You Mess Up, We Clean Up',
         ownerEmail: 'youmessup670@gmail.com',
@@ -87,7 +107,7 @@ describe('sendEmail — recipient formatting', () => {
       message: 'Cleanup quote please',
       form_type: 'contact',
     });
-    assert.equal(ok, true);
+    assert.equal(res.sent, true);
     assert.deepEqual(lastPayload.to, ['youmessup670@gmail.com']);
   });
 
@@ -120,11 +140,11 @@ describe('sendEmail — recipient formatting', () => {
     assert.equal(replyTo.value, 'reply-here@cx.invalid');
   });
 
-  test('SMTP2GO HTTP error -> returns false (does not throw)', async () => {
+  test('SMTP2GO 4xx error -> returns { sent:false, error } and does NOT retry', async () => {
     stubError = Object.assign(new Error('http 400'), {
-      response: { data: { error: 'bad payload' } },
+      response: { status: 400, data: { error: 'bad payload' } },
     });
-    const ok = await sendEmail({
+    const res = await sendEmail({
       site: { businessName: 'B', ownerEmail: 'owner@example.com' },
       site_id: 's1',
       name: 'C',
@@ -132,12 +152,14 @@ describe('sendEmail — recipient formatting', () => {
       message: 'M',
       form_type: 'contact',
     });
-    assert.equal(ok, false);
+    assert.equal(res.sent, false);
+    assert.equal(res.attempts, 1, '4xx must not retry');
+    assert.match(res.error, /bad payload/);
   });
 
-  test('SMTP2GO succeeded=0 -> returns false (delivery did not happen)', async () => {
+  test('SMTP2GO succeeded=0 -> returns { sent:false, error } and does NOT retry', async () => {
     stubResponse = { data: { data: { succeeded: 0 } } };
-    const ok = await sendEmail({
+    const res = await sendEmail({
       site: { businessName: 'B', ownerEmail: 'owner@example.com' },
       site_id: 's1',
       name: 'C',
@@ -145,7 +167,43 @@ describe('sendEmail — recipient formatting', () => {
       message: 'M',
       form_type: 'contact',
     });
-    assert.equal(ok, false);
+    assert.equal(res.sent, false);
+    assert.equal(res.attempts, 1);
+  });
+
+  test('transient network error on first attempt -> retries and succeeds on second', async () => {
+    stubSequence = [
+      { error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) },
+      { response: { data: { data: { succeeded: 1 } } } },
+    ];
+    const res = await sendEmail({
+      site: { businessName: 'B', ownerEmail: 'owner@example.com' },
+      site_id: 's1',
+      name: 'C',
+      email: 'cx@x.invalid',
+      message: 'M',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, true, 'second attempt should succeed');
+    assert.equal(res.attempts, 2, 'should have retried once');
+  });
+
+  test('SMTP2GO 5xx -> retries up to 3 times, gives up with { sent:false }', async () => {
+    const err5xx = () => Object.assign(new Error('http 502'), {
+      response: { status: 502, data: { error: 'upstream borked' } },
+    });
+    stubSequence = [{ error: err5xx() }, { error: err5xx() }, { error: err5xx() }];
+    const res = await sendEmail({
+      site: { businessName: 'B', ownerEmail: 'owner@example.com' },
+      site_id: 's1',
+      name: 'C',
+      email: 'cx@x.invalid',
+      message: 'M',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, false);
+    assert.equal(res.attempts, 3, 'should attempt exactly 3 times before giving up');
+    assert.match(res.error, /borked|502/);
   });
 });
 
