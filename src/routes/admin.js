@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getSites, setSite, deleteSite } = require('../services/sites');
+const { listSubmissions } = require('../services/submissions-store');
 
 function requireAdminKey(req, res, next) {
   const key = req.headers['x-admin-key'];
@@ -14,6 +15,23 @@ router.use(requireAdminKey);
 
 router.get('/sites', (req, res) => {
   res.json(getSites());
+});
+
+// List submissions for one site, newest first. Cursor-less pagination via
+// ?limit=N&offset=N (limit capped at 500 in the store).
+// Optional ?since=<ISO> filter for recent-only fetches.
+router.get('/sites/:siteId/submissions', async (req, res) => {
+  try {
+    const { siteId } = req.params;
+    const limit = Number(req.query.limit) || 50;
+    const offset = Number(req.query.offset) || 0;
+    const since = typeof req.query.since === 'string' ? req.query.since : undefined;
+    const { rows, total } = await listSubmissions(siteId, { limit, offset, since });
+    res.json({ site_id: siteId, total, limit, offset, submissions: rows });
+  } catch (err) {
+    console.error('[ADMIN] submissions list error:', err);
+    res.status(500).json({ error: 'Failed to list submissions.' });
+  }
 });
 
 router.post('/sites/:siteId', (req, res) => {

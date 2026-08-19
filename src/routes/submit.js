@@ -4,8 +4,27 @@ const rateLimit = require('../middleware/rateLimit');
 const { checkHoneypot, validateSubmission } = require('../middleware/spam');
 const { getSite } = require('../services/sites');
 const { sendEmail } = require('../services/email');
+const { insertSubmission } = require('../services/submissions-store');
 const fs = require('fs');
 const path = require('path');
+
+// Standard-shaped submission fields the tracker/form contract exposes.
+// Anything else in req.body gets shoved into `extra` for post-hoc review.
+const STANDARD_FIELDS = new Set([
+  'site_id', 'name', 'email', 'phone', 'message', 'form_type',
+  // honeypot / anti-spam bookkeeping
+  '_gotcha', '_honeypot', 'website',
+]);
+
+function extractExtras(body) {
+  const extras = {};
+  for (const [k, v] of Object.entries(body || {})) {
+    if (STANDARD_FIELDS.has(k)) continue;
+    // cap value size defensively
+    extras[k] = typeof v === 'string' ? v.slice(0, 2000) : v;
+  }
+  return Object.keys(extras).length ? extras : null;
+}
 
 const logsDir = path.join(__dirname, '../../logs');
 const logFile = path.join(logsDir, 'submissions.jsonl');
@@ -48,15 +67,22 @@ router.post('/', rateLimit, (req, res, next) => {
       return res.json({ success: true, message: "Thanks! We'll be in touch soon." });
     }
 
-    const emailSent = await sendEmail({
-      site,
-      site_id,
-      name,
-      email,
-      phone,
-      message,
-      form_type
-    });
+    let emailSent = false;
+    let emailError = null;
+    try {
+      emailSent = await sendEmail({
+        site,
+        site_id,
+        name,
+        email,
+        phone,
+        message,
+        form_type
+      });
+    } catch (err) {
+      emailError = (err && err.message) || String(err);
+      console.error('[SUBMIT] sendEmail threw:', emailError);
+    }
 
     const logEntry = {
       timestamp: new Date().toISOString(),
@@ -74,6 +100,23 @@ router.post('/', rateLimit, (req, res, next) => {
     } catch (err) {
       console.error('[LOG] Failed to write submission log:', err.message);
     }
+
+    // Durable persistence to Pixel Supabase. Non-fatal — the visitor still
+    // sees success even if the store is unavailable (email + local log are
+    // the primary delivery paths). See services/submissions-store.js.
+    insertSubmission({
+      site_id,
+      form_type,
+      name,
+      email,
+      phone,
+      message,
+      extra: extractExtras(req.body),
+      email_sent: emailSent,
+      email_error: emailError,
+      ip: req.ip,
+      user_agent: req.headers['user-agent'] || null,
+    }).catch((err) => console.error('[SUBMIT] insertSubmission failed:', err.message));
 
     if (!emailSent) {
       console.log(`[SUBMIT] result=email_failed site_id=${site_id}`);
