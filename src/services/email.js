@@ -1,5 +1,50 @@
 const axios = require('axios');
 
+/**
+ * Send a form submission notification email via SMTP2GO with automatic
+ * retry on transient failures.
+ *
+ * Reliability history (see 2026-08-19 audit):
+ *   - Original impl: single attempt, 10s timeout, boolean return.
+ *   - Observed: intermittent 10s+ timeouts from Railway → SMTP2GO. On a
+ *     small-volume site (~2-3 submits/month), a single transient failure
+ *     = an entire lost lead. Not acceptable when a customer is paying
+ *     for the site.
+ *
+ * New behaviour:
+ *   - 30s per-attempt timeout (SMTP2GO API is usually <2s; the extra
+ *     headroom absorbs Railway network jitter without harming happy path).
+ *   - 3 total attempts with backoff: 0s / 2s / 6s.
+ *   - Retryable = network errors, 5xx, 429 rate limits, timeouts.
+ *     NOT retryable = 4xx (bad payload — retrying won't help).
+ *   - Returns `{ sent: boolean, error: string | null, attempts: number }`
+ *     so the caller can persist the exact failure reason.
+ */
+const SEND_TIMEOUT_MS = Number(process.env.EMAIL_SEND_TIMEOUT_MS) || 30_000;
+// Retry delays override via EMAIL_RETRY_DELAYS_MS (comma-separated, ms) so
+// tests can drive the retry ladder without sleeping 8 seconds.
+function parseRetryDelays() {
+  const raw = process.env.EMAIL_RETRY_DELAYS_MS;
+  if (!raw) return [0, 2_000, 6_000];
+  const parts = raw.split(',').map((s) => Number(s.trim())).filter((n) => !isNaN(n) && n >= 0);
+  return parts.length ? parts : [0, 2_000, 6_000];
+}
+const RETRY_DELAYS_MS = parseRetryDelays();
+
+async function sleep(ms) {
+  if (ms <= 0) return;
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isRetryable(err) {
+  // Network / timeout / connection reset
+  if (!err.response) return true;
+  const status = err.response.status || 0;
+  // Retry 5xx and 429; do not retry other 4xx (that's a real rejection).
+  if (status >= 500 || status === 429) return true;
+  return false;
+}
+
 async function sendEmail({ site, site_id, name, email, phone, message, form_type }) {
   const apiKey = process.env.SMTP2GO_API_KEY;
   const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zing-work.com';
@@ -38,46 +83,71 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
     </div>
   `;
 
-  // SMTP2GO's `to:` field parses the entry as an RFC 5322 mailbox. The
-  // 'Display Name <email>' form is valid in theory, but if the display
-  // name contains a comma (e.g. 'You Mess Up, We Clean Up'), SMTP2GO
-  // splits on it and treats the second half as an additional recipient,
-  // which fails the 'no angle-addr' validator with a 400. Diagnosed
-  // 2026-06-29: site_id=lkv363od has been failing for that exact reason
-  // since June 23. Two safe ways to fix: (a) RFC 5322 quote the display
-  // name when it contains a comma, or (b) drop the display name and
-  // ship the bare email. We pick (b) because email clients show the
-  // recipient address verbatim anyway and the customer's businessName
-  // is already in the subject + html body. Less surface area for future
-  // bugs.
+  // SMTP2GO's `to:` field parses the entry as an RFC 5322 mailbox.
+  // 'Display Name <email>' is valid in theory, but a display name with a
+  // comma (e.g. 'You Mess Up, We Clean Up') gets split on the comma and
+  // treated as multiple recipients → 400 "no angle-addr". Diagnosed
+  // 2026-06-29 (site lkv363od). Ship the bare email; the businessName is
+  // in the subject + html body.
   const payload = {
     api_key: apiKey,
     to: [site.ownerEmail],
     sender: `${fromName} <${fromEmail}>`,
     subject,
-    html_body: htmlBody
+    html_body: htmlBody,
   };
 
   if (email) {
     payload.custom_headers = [{ header: 'Reply-To', value: email }];
   }
 
-  try {
-    const response = await axios.post('https://api.smtp2go.com/v3/email/send', payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-
-    if (response.data && response.data.data && response.data.data.succeeded > 0) {
-      return true;
+  let lastError = null;
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+    if (RETRY_DELAYS_MS[attempt] > 0) {
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      console.log(`[EMAIL] retry attempt ${attempt + 1}/${RETRY_DELAYS_MS.length} for site_id=${site_id}`);
     }
+    try {
+      const response = await axios.post(
+        'https://api.smtp2go.com/v3/email/send',
+        payload,
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: SEND_TIMEOUT_MS,
+        },
+      );
 
-    console.error('[EMAIL] SMTP2GO did not confirm success:', response.data);
-    return false;
-  } catch (err) {
-    console.error('[EMAIL] SMTP2GO error:', err.response?.data || err.message);
-    return false;
+      if (response.data && response.data.data && response.data.data.succeeded > 0) {
+        return { sent: true, error: null, attempts: attempt + 1 };
+      }
+
+      // SMTP2GO returned 200 but succeeded=0 — inspect the response for
+      // recipient-level failure details.
+      const failureReason =
+        response.data?.data?.failures?.[0] ||
+        response.data?.data?.error ||
+        'SMTP2GO returned 200 but did not confirm success';
+      console.error(`[EMAIL] non-success on attempt ${attempt + 1}:`, JSON.stringify(response.data).slice(0, 400));
+      lastError = String(failureReason).slice(0, 500);
+      // Non-success at API level is a real rejection (e.g. blocklisted
+      // recipient). Don't retry.
+      return { sent: false, error: lastError, attempts: attempt + 1 };
+    } catch (err) {
+      lastError =
+        err.response?.data?.data?.error ||
+        err.response?.data?.error ||
+        err.message ||
+        String(err);
+      lastError = String(lastError).slice(0, 500);
+      console.error(`[EMAIL] attempt ${attempt + 1} error:`, lastError);
+      if (!isRetryable(err) || attempt === RETRY_DELAYS_MS.length - 1) {
+        return { sent: false, error: lastError, attempts: attempt + 1 };
+      }
+      // else: fall through, next iteration retries after the backoff delay
+    }
   }
+
+  return { sent: false, error: lastError || 'exhausted retries', attempts: RETRY_DELAYS_MS.length };
 }
 
 function escapeHtml(str) {
