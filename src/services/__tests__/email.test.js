@@ -53,7 +53,7 @@ Module._load = function (request, parent, ...rest) {
 process.env.EMAIL_RETRY_DELAYS_MS = '0,0,0';
 
 // Now require the module under test (axios stub will be picked up).
-const { sendEmail } = require('../email');
+const { sendEmail, _internals } = require('../email');
 
 beforeEach(() => {
   lastPayload = null;
@@ -204,6 +204,162 @@ describe('sendEmail — recipient formatting', () => {
     assert.equal(res.sent, false);
     assert.equal(res.attempts, 3, 'should attempt exactly 3 times before giving up');
     assert.match(res.error, /borked|502/);
+  });
+});
+
+describe('sendEmail — extra field rendering (rentamover 2026-08-20 fix)', () => {
+  const baseCall = (extra) => sendEmail({
+    site: { businessName: 'Rentamover', ownerEmail: 'owner@rentamover.invalid' },
+    site_id: '2p3cout6',
+    name: 'test Wooten',
+    email: 'mb200688@yahoo.invalid',
+    phone: '2293761453',
+    message: '',
+    form_type: 'quote',
+    extra,
+  });
+
+  test('renders every non-empty field in `extra` as its own table row', async () => {
+    await baseCall({
+      movetype: 'Local move',
+      bedrooms: '3',
+      referral: 'facebook',
+    });
+    const html = lastPayload.html_body;
+    assert.match(html, /Move ?type|Movetype/i, 'expected a Movetype row label');
+    assert.match(html, />Local move</);
+    assert.match(html, />3</);
+    assert.match(html, />facebook</);
+  });
+
+  test('skips null / undefined / empty-string / empty-object extras', async () => {
+    await baseCall({
+      keep: 'visible',
+      empty_string: '',
+      whitespace_only: '   ',
+      null_field: null,
+      undef_field: undefined,
+      empty_object: {},
+    });
+    const html = lastPayload.html_body;
+    assert.match(html, />visible</);
+    // None of the empty-field labels should appear anywhere.
+    assert.doesNotMatch(html, /Empty String/i);
+    assert.doesNotMatch(html, /Whitespace Only/i);
+    assert.doesNotMatch(html, /Null Field/i);
+    assert.doesNotMatch(html, /Undef Field/i);
+    assert.doesNotMatch(html, /Empty Object/i);
+  });
+
+  test('humanizes field names: snake_case, kebab-case, camelCase', async () => {
+    // humanizeKey is exported via _internals for direct assertions.
+    assert.equal(_internals.humanizeKey('move_type'), 'Move Type');
+    assert.equal(_internals.humanizeKey('from-residence'), 'From Residence');
+    assert.equal(_internals.humanizeKey('timing_notes'), 'Timing Notes');
+    assert.equal(_internals.humanizeKey('timingNotes'), 'Timing Notes');
+    // `movetype` is a single lowercase token — no separator to split on,
+    // so it becomes "Movetype". Documented so the fix is predictable.
+    assert.equal(_internals.humanizeKey('movetype'), 'Movetype');
+
+    // And confirm they end up in the rendered HTML with those labels.
+    await baseCall({
+      move_type: 'Local move',
+      'from-residence': 'House',
+      timing_notes: 'Prefer weekend',
+    });
+    const html = lastPayload.html_body;
+    assert.match(html, />Move Type</);
+    assert.match(html, />From Residence</);
+    assert.match(html, />Timing Notes</);
+  });
+
+  test('boolean values render as Yes / No', async () => {
+    await baseCall({ fragile: true, packing: false });
+    const html = lastPayload.html_body;
+    assert.match(html, /Fragile[\s\S]*?>Yes</);
+    assert.match(html, /Packing[\s\S]*?>No</);
+  });
+
+  test('handles the real rentamover shape (17 extras, empty-object scope, empty strings)', async () => {
+    await baseCall({
+      boxes: '20',
+      notes: '',
+      scope: {},
+      stairs: 'Elevator',
+      timing: 'No',
+      details: '',
+      fragile: 'Yes',
+      packing: 'No',
+      bedrooms: '3',
+      movedate: '2026-09-05',
+      movetype: 'Local move',
+      referral: 'facebook',
+      unpacking: 'No',
+      'timing-notes': '',
+      'to-residence': 'House',
+      'from-residence': 'House',
+    });
+    const html = lastPayload.html_body;
+
+    // Section header appears exactly once.
+    const headerMatches = html.match(/Additional Details/g) || [];
+    assert.equal(headerMatches.length, 1, 'section header should appear once');
+
+    // Every non-empty field label + value is present.
+    const expectedRows = [
+      ['Boxes', '20'],
+      ['Stairs', 'Elevator'],
+      ['Timing', 'No'],
+      ['Fragile', 'Yes'],
+      ['Packing', 'No'],
+      ['Bedrooms', '3'],
+      ['Movedate', '2026-09-05'],
+      ['Movetype', 'Local move'],
+      ['Referral', 'facebook'],
+      ['Unpacking', 'No'],
+      ['To Residence', 'House'],
+      ['From Residence', 'House'],
+    ];
+    for (const [label, value] of expectedRows) {
+      assert.match(html, new RegExp(`>${label}<`), `missing label: ${label}`);
+      assert.match(html, new RegExp(`>${value}<`), `missing value: ${value}`);
+    }
+
+    // Empty ones are skipped entirely.
+    for (const skip of ['Notes', 'Scope', 'Details', 'Timing Notes']) {
+      assert.doesNotMatch(
+        html,
+        new RegExp(`>${skip}<`),
+        `empty field "${skip}" should not render a row`,
+      );
+    }
+  });
+
+  test('XSS-safe: extra values with <script> tags get escaped', async () => {
+    await baseCall({
+      referral: '<script>alert(1)</script>',
+      note_key: '"onclick="evil"',
+    });
+    const html = lastPayload.html_body;
+    assert.doesNotMatch(html, /<script>alert/);
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    // attribute-injection attempt should have its quotes escaped
+    assert.match(html, /&quot;onclick=&quot;evil&quot;/);
+  });
+
+  test('extras section is omitted entirely when extra is null / undefined / empty', async () => {
+    await baseCall(null);
+    assert.doesNotMatch(lastPayload.html_body, /Additional Details/);
+
+    await baseCall(undefined);
+    assert.doesNotMatch(lastPayload.html_body, /Additional Details/);
+
+    await baseCall({});
+    assert.doesNotMatch(lastPayload.html_body, /Additional Details/);
+
+    // All-empty values also produce no section.
+    await baseCall({ a: '', b: null, c: {} });
+    assert.doesNotMatch(lastPayload.html_body, /Additional Details/);
   });
 });
 

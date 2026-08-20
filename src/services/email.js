@@ -45,13 +45,15 @@ function isRetryable(err) {
   return false;
 }
 
-async function sendEmail({ site, site_id, name, email, phone, message, form_type }) {
+async function sendEmail({ site, site_id, name, email, phone, message, form_type, extra }) {
   const apiKey = process.env.SMTP2GO_API_KEY;
   const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zing-work.com';
   const fromName = process.env.SMTP2GO_FROM_NAME || 'ZING Website Forms';
 
   const subject = `New ${form_type} from ${name} — ${site.businessName}`;
   const timestamp = new Date().toISOString();
+
+  const extrasHtml = renderExtras(extra);
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -60,7 +62,7 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
       </h2>
       <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
         <tr>
-          <td style="padding: 8px 12px; font-weight: bold; color: #555; width: 120px;">Name</td>
+          <td style="padding: 8px 12px; font-weight: bold; color: #555; width: 140px;">Name</td>
           <td style="padding: 8px 12px;">${escapeHtml(name)}</td>
         </tr>
         ${email ? `<tr>
@@ -75,6 +77,7 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
           <td style="padding: 8px 12px; font-weight: bold; color: #555; vertical-align: top;">Message</td>
           <td style="padding: 8px 12px; white-space: pre-wrap;">${escapeHtml(message)}</td>
         </tr>` : ''}
+        ${extrasHtml}
       </table>
       <p style="margin-top: 24px; font-size: 12px; color: #999;">
         Submitted at ${timestamp}<br>
@@ -151,7 +154,7 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
 }
 
 function escapeHtml(str) {
-  if (!str) return '';
+  if (str === null || str === undefined) return '';
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -159,4 +162,85 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-module.exports = { sendEmail };
+/**
+ * Turn a raw field key (snake_case, kebab-case, or camelCase) into a
+ * human-friendly Title-Case label. Examples:
+ *   movetype        -> "Movetype"
+ *   move_type       -> "Move Type"
+ *   from-residence  -> "From Residence"
+ *   timingNotes     -> "Timing Notes"
+ */
+function humanizeKey(key) {
+  if (!key) return '';
+  const str = String(key)
+    // insert space at camelCase word boundaries: fooBar -> foo Bar
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    // split snake_case / kebab-case
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return str
+    .split(/\s+/)
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ''))
+    .join(' ');
+}
+
+/**
+ * Format a single field value for HTML display. Returns null when the
+ * value should be skipped entirely (empty string, null, undefined, empty
+ * object, empty array).
+ */
+function formatValueHtml(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return escapeHtml(String(value));
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    // white-space:pre-wrap on the containing cell handles multiline
+    return escapeHtml(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    return escapeHtml(value.map((v) => (v === null || v === undefined ? '' : String(v))).join(', '));
+  }
+  if (typeof value === 'object') {
+    // Skip empty objects (e.g. the file-upload placeholder `scope: {}`).
+    if (Object.keys(value).length === 0) return null;
+    return `<pre style="margin: 0; font-family: Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap;">${escapeHtml(
+      JSON.stringify(value, null, 2),
+    )}</pre>`;
+  }
+  // fallback: coerce to string
+  const s = String(value);
+  return s ? escapeHtml(s) : null;
+}
+
+/**
+ * Render every non-empty entry in `extra` as an appended table row block,
+ * preceded by a subtle "Additional Details" section header. Returns an
+ * empty string when there is nothing worth showing.
+ *
+ * Ordering: preserve insertion order of the extra object so the operator
+ * sees fields in roughly the same sequence the customer filled them out.
+ */
+function renderExtras(extra) {
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return '';
+  const rows = [];
+  for (const [key, value] of Object.entries(extra)) {
+    const html = formatValueHtml(value);
+    if (html === null) continue;
+    rows.push(`<tr>
+          <td style="padding: 8px 12px; font-weight: bold; color: #555; vertical-align: top;">${escapeHtml(
+            humanizeKey(key),
+          )}</td>
+          <td style="padding: 8px 12px; white-space: pre-wrap;">${html}</td>
+        </tr>`);
+  }
+  if (rows.length === 0) return '';
+  const header = `<tr>
+          <td colspan="2" style="padding: 12px 12px 6px; margin-top: 8px; font-weight: bold; color: #333; background: #f4f6f8; border-top: 1px solid #e2e6ea; border-bottom: 1px solid #e2e6ea; text-transform: uppercase; letter-spacing: 0.5px; font-size: 12px;">Additional Details</td>
+        </tr>`;
+  return header + rows.join('');
+}
+
+module.exports = { sendEmail, _internals: { humanizeKey, formatValueHtml, renderExtras } };
