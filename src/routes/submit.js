@@ -47,6 +47,11 @@ router.post('/', rateLimit, (req, res, next) => {
   const traditional = isTraditionalPost(req);
   try {
     const { site_id, name, email, phone, message, form_type = 'contact' } = req.body;
+    // Extract once so the notification email + durable store see the
+    // exact same `extra` payload. Historically only insertSubmission got
+    // this; email.js rendered a fixed 4-row template, hiding every
+    // form-specific field. Fixed 2026-08-20 after rentamover complaint.
+    const extras = extractExtras(req.body);
 
     const site = await getSite(site_id);
     if (!site) {
@@ -82,6 +87,7 @@ router.post('/', rateLimit, (req, res, next) => {
         phone,
         message,
         form_type,
+        extra: extras,
       });
       emailSent = result.sent;
       emailError = result.error;
@@ -121,7 +127,7 @@ router.post('/', rateLimit, (req, res, next) => {
       email,
       phone,
       message,
-      extra: extractExtras(req.body),
+      extra: extras,
       email_sent: emailSent,
       email_error: emailError,
       ip: req.ip,
