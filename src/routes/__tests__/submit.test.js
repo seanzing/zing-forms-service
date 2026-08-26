@@ -224,6 +224,119 @@ describe('POST /submit — JSON path (regression / no-files fast path)', () => {
   });
 });
 
+describe('POST /submit — human question labels (Fix B, 2026-08-26)', () => {
+  test('_field_labels JSON → email renders labels, DB row records the map, extras block hides the metadata key', async () => {
+    const res = await requestJson({
+      site_id: 's1',
+      name: 'Jane Applicant',
+      email: 'jane@example.invalid',
+      phone: '555-0000',
+      'q-cdl': 'Yes',
+      'q-moving': 'No',
+      bedrooms: '3',
+      _field_labels: JSON.stringify({
+        'q-cdl': 'Do you have a Class A license?',
+        'q-moving': 'Do you have moving experience?',
+      }),
+    });
+    assert.equal(res.status, 200);
+    // Labels rendered.
+    assert.match(lastSmtpPayload.html_body, />Do you have a Class A license\?</);
+    assert.match(lastSmtpPayload.html_body, />Do you have moving experience\?</);
+    // bedrooms had no label — falls through to humanizeKey.
+    assert.match(lastSmtpPayload.html_body, />Bedrooms</);
+    // The metadata key must NOT surface anywhere in the extras block.
+    assert.doesNotMatch(lastSmtpPayload.html_body, /_field_labels/i);
+    assert.doesNotMatch(lastSmtpPayload.html_body, /Field Labels/i);
+    // DB row records the map verbatim.
+    assert.deepEqual(lastStoredRow.field_labels, {
+      'q-cdl': 'Do you have a Class A license?',
+      'q-moving': 'Do you have moving experience?',
+    });
+    // And the extras bag DOES NOT contain _field_labels.
+    assert.equal(lastStoredRow.extra._field_labels, undefined);
+  });
+
+  test('malformed _field_labels JSON → treated as empty, no crash, extras still humanize', async () => {
+    const res = await requestJson({
+      site_id: 's1',
+      name: 'Jane Applicant',
+      phone: '555-0000',
+      'q-cdl': 'Yes',
+      _field_labels: '{not valid json',
+    });
+    assert.equal(res.status, 200);
+    // Falls back to humanizeKey.
+    assert.match(lastSmtpPayload.html_body, />Q Cdl</);
+    // DB row has null field_labels (empty map → stored as null).
+    assert.equal(lastStoredRow.field_labels, null);
+  });
+
+  test('_field_labels present but empty object → humanize fallback for all keys', async () => {
+    const res = await requestJson({
+      site_id: 's1',
+      name: 'Jane',
+      phone: '555-0000',
+      'q-cdl': 'Yes',
+      _field_labels: '{}',
+    });
+    assert.equal(res.status, 200);
+    assert.match(lastSmtpPayload.html_body, />Q Cdl</);
+    assert.equal(lastStoredRow.field_labels, null);
+  });
+
+  test('_field_labels JSON is stripped from extras (metadata, not a customer answer)', async () => {
+    // Even if a design ships _field_labels through the JSON path, it must
+    // never render as an "Additional Details" row — that would leak
+    // implementation detail into the operator email.
+    const res = await requestJson({
+      site_id: 's1',
+      name: 'Jane',
+      phone: '555-0000',
+      'q-cdl': 'Yes',
+      _field_labels: JSON.stringify({ 'q-cdl': 'Class A license?' }),
+    });
+    assert.equal(res.status, 200);
+    // No row labelled "Field Labels" (which is what humanizeKey would produce).
+    assert.doesNotMatch(lastSmtpPayload.html_body, />Field Labels</);
+    // And the row IS labelled with the human question.
+    assert.match(lastSmtpPayload.html_body, />Class A license\?</);
+  });
+
+  test('XSS-safe: a label with a <script> tag survives round-trip escaped', async () => {
+    const res = await requestJson({
+      site_id: 's1',
+      name: 'Jane',
+      phone: '555-0000',
+      thing: 'answer',
+      _field_labels: JSON.stringify({ thing: '<script>alert(1)</script>' }),
+    });
+    assert.equal(res.status, 200);
+    assert.doesNotMatch(lastSmtpPayload.html_body, /<script>alert/);
+    assert.match(lastSmtpPayload.html_body, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  });
+
+  test('parseFieldLabels internal: skips non-string values, trims + caps at 200 chars', () => {
+    const { parseFieldLabels } = require('../submit')._internals;
+    // Reject non-strings.
+    assert.deepEqual(parseFieldLabels(JSON.stringify({ a: 123, b: null, c: 'ok' })), { c: 'ok' });
+    // Trim + cap.
+    const long = 'x'.repeat(300);
+    const out = parseFieldLabels(JSON.stringify({ q: '   ' + long + '   ' }));
+    assert.equal(out.q.length, 200);
+    // Malformed JSON → empty.
+    assert.deepEqual(parseFieldLabels('{no'), {});
+    // Non-object JSON (array / primitive) → empty.
+    assert.deepEqual(parseFieldLabels('["a", "b"]'), {});
+    assert.deepEqual(parseFieldLabels('42'), {});
+    // Nullish / non-string input → empty.
+    assert.deepEqual(parseFieldLabels(null), {});
+    assert.deepEqual(parseFieldLabels(undefined), {});
+    assert.deepEqual(parseFieldLabels(''), {});
+    assert.deepEqual(parseFieldLabels({ a: 1 }), {});
+  });
+});
+
 describe('POST /submit — multipart path (Fix A: file uploads)', () => {
   test('accepts a small PDF, forwards it as an SMTP attachment, logs metadata', async () => {
     const pdfBuf = Buffer.from('%PDF-1.4\n%fake\n');

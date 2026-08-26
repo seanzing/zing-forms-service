@@ -45,7 +45,7 @@ function isRetryable(err) {
   return false;
 }
 
-async function sendEmail({ site, site_id, name, email, phone, message, form_type, extra, attachments }) {
+async function sendEmail({ site, site_id, name, email, phone, message, form_type, extra, fieldLabels, attachments }) {
   const apiKey = process.env.SMTP2GO_API_KEY;
   const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zing-work.com';
   const fromName = process.env.SMTP2GO_FROM_NAME || 'ZING Website Forms';
@@ -53,7 +53,14 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
   const subject = `New ${form_type} from ${name} — ${site.businessName}`;
   const timestamp = new Date().toISOString();
 
-  const extrasHtml = renderExtras(extra);
+  // Fix B (2026-08-26): the renderer may have emitted a
+  // { fieldName -> human question text } map alongside the submission.
+  // When present, `renderExtras` prefers `labels[key]` over
+  // `humanizeKey(key)` so the operator sees “Do you have a Class A
+  // license?” instead of “Q Cdl”. Falls through to humanizeKey() for
+  // every field the map doesn't cover — no regression for existing
+  // designs that don’t ship labels yet.
+  const extrasHtml = renderExtras(extra, fieldLabels);
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -237,16 +244,30 @@ function formatValueHtml(value) {
  *
  * Ordering: preserve insertion order of the extra object so the operator
  * sees fields in roughly the same sequence the customer filled them out.
+ *
+ * @param {object} extra
+ *   The extras bag pulled off the submission body (unknown fields the
+ *   form contract doesn’t explicitly know about).
+ * @param {object} [labels]
+ *   Optional { fieldName -> human question text } map, provided by the
+ *   Pixel renderer via a hidden `_field_labels` input. Fix B (2026-08-26).
+ *   When a key exists in this map, we use the label verbatim; otherwise
+ *   we fall back to `humanizeKey(key)` — same behaviour as pre-Fix-B.
  */
-function renderExtras(extra) {
+function renderExtras(extra, labels) {
   if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return '';
+  const labelMap = labels && typeof labels === 'object' && !Array.isArray(labels) ? labels : {};
   const rows = [];
   for (const [key, value] of Object.entries(extra)) {
     const html = formatValueHtml(value);
     if (html === null) continue;
+    // Prefer renderer-provided label. Only strings count — anything else
+    // (accidental object, boolean, etc.) falls through to humanizeKey().
+    const rawLabel = typeof labelMap[key] === 'string' ? labelMap[key].trim() : '';
+    const label = rawLabel || humanizeKey(key);
     rows.push(`<tr>
           <td style="padding: 8px 12px; font-weight: bold; color: #555; vertical-align: top;">${escapeHtml(
-            humanizeKey(key),
+            label,
           )}</td>
           <td style="padding: 8px 12px; white-space: pre-wrap;">${html}</td>
         </tr>`);
