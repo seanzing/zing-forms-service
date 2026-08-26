@@ -363,6 +363,108 @@ describe('sendEmail — extra field rendering (rentamover 2026-08-20 fix)', () =
   });
 });
 
+describe('sendEmail — human question labels (Fix B, 2026-08-26)', () => {
+  const baseCall = (extra, fieldLabels) => sendEmail({
+    site: { businessName: 'Rentamover', ownerEmail: 'owner@rentamover.invalid' },
+    site_id: '2p3cout6',
+    name: 'Jane Applicant',
+    email: 'jane@example.invalid',
+    phone: '5551230000',
+    message: '',
+    form_type: 'careers',
+    extra,
+    fieldLabels,
+  });
+
+  test('renders labels[key] verbatim when the renderer supplied one', async () => {
+    await baseCall(
+      { 'q-cdl': 'Yes', 'q-moving': 'No', 'q-transport': 'Yes' },
+      {
+        'q-cdl': 'Do you have a Class A license?',
+        'q-moving': 'Do you have moving experience?',
+        'q-transport': 'Do you have reliable transportation to & from work?',
+      },
+    );
+    const html = lastPayload.html_body;
+    // Question labels appear in the table — the ampersand gets escaped.
+    assert.match(html, />Do you have a Class A license\?</);
+    assert.match(html, />Do you have moving experience\?</);
+    assert.match(html, />Do you have reliable transportation to &amp; from work\?</);
+    // The old-shape "Q Cdl" humanization must NOT appear — that's what
+    // Fix B is here to kill.
+    assert.doesNotMatch(html, />Q Cdl</);
+    assert.doesNotMatch(html, />Q Moving</);
+    // Values still render.
+    assert.match(html, />Yes</);
+    assert.match(html, />No</);
+  });
+
+  test('falls back to humanizeKey() for keys the label map does not cover', async () => {
+    // Only one of the three extras has a label — the other two must
+    // still render with the classic humanized labels so we don't regress
+    // on partial coverage.
+    await baseCall(
+      { 'q-cdl': 'Yes', bedrooms: '3', movetype: 'Local move' },
+      { 'q-cdl': 'Do you have a Class A license?' },
+    );
+    const html = lastPayload.html_body;
+    assert.match(html, />Do you have a Class A license\?</);
+    assert.match(html, />Bedrooms</);
+    assert.match(html, />Movetype</);
+  });
+
+  test('an empty label map is a no-op (all rows humanize the classic way)', async () => {
+    await baseCall({ 'q-cdl': 'Yes', movetype: 'Local move' }, {});
+    const html = lastPayload.html_body;
+    assert.match(html, />Q Cdl</);
+    assert.match(html, />Movetype</);
+  });
+
+  test('undefined fieldLabels is equivalent to no map (pre-Fix-B behaviour)', async () => {
+    await baseCall({ 'q-cdl': 'Yes' }, undefined);
+    assert.match(lastPayload.html_body, />Q Cdl</);
+  });
+
+  test('XSS-safe: label containing <script> gets escaped like every other field', async () => {
+    await baseCall(
+      { thing: 'answer' },
+      { thing: '<script>alert(1)</script>' },
+    );
+    const html = lastPayload.html_body;
+    assert.doesNotMatch(html, /<script>alert/);
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  });
+
+  test('non-string label value (defensive) falls back to humanizeKey', async () => {
+    // If some future codepath accidentally shoves a non-string into the
+    // map, we must not crash — we just ignore that entry.
+    await baseCall(
+      { 'q-cdl': 'Yes' },
+      { 'q-cdl': 123, other: null },
+    );
+    assert.match(lastPayload.html_body, />Q Cdl</);
+  });
+
+  test('renderExtras is exported and directly testable with labels arg', () => {
+    const html = _internals.renderExtras(
+      { 'q-cdl': 'Yes' },
+      { 'q-cdl': 'Do you have a Class A license?' },
+    );
+    assert.match(html, />Do you have a Class A license\?</);
+    assert.match(html, />Yes</);
+  });
+
+  test('renderExtras with a bogus labels arg (array / string / null) ignores it gracefully', () => {
+    // Defensive: same call shape as pre-Fix-B — no crash.
+    const nullHtml = _internals.renderExtras({ 'q-cdl': 'Yes' }, null);
+    assert.match(nullHtml, />Q Cdl</);
+    const arrHtml = _internals.renderExtras({ 'q-cdl': 'Yes' }, ['not', 'an', 'object']);
+    assert.match(arrHtml, />Q Cdl</);
+    const strHtml = _internals.renderExtras({ 'q-cdl': 'Yes' }, 'oops');
+    assert.match(strHtml, />Q Cdl</);
+  });
+});
+
 // Restore module loader at the end so other tests aren't affected.
 process.on('exit', () => {
   Module._resolveFilename = origResolve;

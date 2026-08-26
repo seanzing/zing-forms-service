@@ -47,6 +47,12 @@ function hashIp(ip, salt) {
  * @param {string|null} row.phone
  * @param {string|null} row.message
  * @param {object|null} row.extra
+ * @param {object|null} [row.field_labels]
+ *   Renderer-provided { fieldName -> human question text } map. Added
+ *   2026-08-26 (Fix B). Persisted so the admin dashboard can show the
+ *   operator the actual question the customer answered instead of the
+ *   humanized field key. Backwards-compatible: the DB column defaults
+ *   to NULL and older rows have no map.
  * @param {Array<{field:string, filename:string, mimetype:string, size:number}>|null} [row.attachments]
  *   Metadata for uploaded files delivered as email attachments. Bytes
  *   are NOT stored here — SMTP is the delivery layer. Added 2026-08-26
@@ -74,6 +80,9 @@ async function insertSubmission(row) {
         phone: row.phone || null,
         message: row.message || null,
         extra: row.extra || null,
+        field_labels: row.field_labels && typeof row.field_labels === 'object' && !Array.isArray(row.field_labels) && Object.keys(row.field_labels).length > 0
+          ? row.field_labels
+          : null,
         attachments: Array.isArray(row.attachments) && row.attachments.length > 0 ? row.attachments : null,
         email_sent: !!row.email_sent,
         email_error: row.email_error || null,
@@ -109,7 +118,7 @@ async function listSubmissions(siteId, opts = {}) {
   let q = client
     .from('form_submissions')
     .select(
-      'id,site_id,form_type,submitted_at,name,email,phone,message,extra,attachments,email_sent,email_error',
+      'id,site_id,form_type,submitted_at,name,email,phone,message,extra,field_labels,attachments,email_sent,email_error',
       { count: 'exact' },
     )
     .eq('site_id', siteId)

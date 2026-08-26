@@ -15,7 +15,42 @@ const STANDARD_FIELDS = new Set([
   'site_id', 'name', 'email', 'phone', 'message', 'form_type',
   // honeypot / anti-spam bookkeeping
   '_gotcha', '_honeypot', 'website',
+  // Fix B (2026-08-26): renderer-provided { fieldName -> human question }
+  // JSON blob. Handled separately from `extras` — it's metadata, not a
+  // customer answer, and must never render as an "Additional Details"
+  // row in the operator email.
+  '_field_labels',
 ]);
+
+/**
+ * Parse the renderer's `_field_labels` hidden input into a
+ * { fieldName -> human question } map. Defensive:
+ *   - null / undefined / '' → {}
+ *   - non-string types → {} (defensive; multer parses everything as strings)
+ *   - malformed JSON → {} + console.warn (don't crash the submit path)
+ *   - non-plain-object JSON (array, primitive) → {}
+ *   - values that aren't strings → filtered out
+ * Length caps: at most 200 chars per label, matches the renderer-side cap.
+ */
+function parseFieldLabels(raw) {
+  if (!raw || typeof raw !== 'string') return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn('[SUBMIT] _field_labels: malformed JSON, ignoring:', err.message);
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (!trimmed) continue;
+    out[k] = trimmed.slice(0, 200);
+  }
+  return out;
+}
 
 /**
  * Turn multer's `req.files` array into two things the downstream code needs:
@@ -118,6 +153,10 @@ router.post('/', rateLimit, maybeMultipart, (req, res, next) => {
     // this; email.js rendered a fixed 4-row template, hiding every
     // form-specific field. Fixed 2026-08-20 after rentamover complaint.
     const extras = extractExtras(req.body);
+    // Fix B (2026-08-26): renderer-provided question labels. Falls back
+    // to {} on any parse issue — email.js’s renderExtras then falls back
+    // to humanizeKey() the way it did pre-Fix-B, so no crash + no regression.
+    const fieldLabels = parseFieldLabels(req.body._field_labels);
 
     // Bundle uploaded files (if any) into email attachments + audit metadata.
     // See buildAttachments() docstring for shape rationale.
@@ -165,6 +204,7 @@ router.post('/', rateLimit, maybeMultipart, (req, res, next) => {
         message,
         form_type,
         extra: extrasForEmail,
+        fieldLabels,
         attachments,
       });
       emailSent = result.sent;
@@ -206,6 +246,7 @@ router.post('/', rateLimit, maybeMultipart, (req, res, next) => {
       phone,
       message,
       extra: extras,
+      field_labels: Object.keys(fieldLabels).length ? fieldLabels : null,
       attachments: attachmentsMeta.length ? attachmentsMeta : null,
       email_sent: emailSent,
       email_error: emailError,
@@ -239,3 +280,5 @@ router.post('/', rateLimit, maybeMultipart, (req, res, next) => {
 });
 
 module.exports = router;
+// Exported for unit tests — not part of the HTTP surface.
+module.exports._internals = { parseFieldLabels, extractExtras };
