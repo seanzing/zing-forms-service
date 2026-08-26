@@ -45,7 +45,7 @@ function isRetryable(err) {
   return false;
 }
 
-async function sendEmail({ site, site_id, name, email, phone, message, form_type, extra }) {
+async function sendEmail({ site, site_id, name, email, phone, message, form_type, extra, attachments }) {
   const apiKey = process.env.SMTP2GO_API_KEY;
   const fromEmail = process.env.SMTP2GO_FROM_EMAIL || 'noreply@zing-work.com';
   const fromName = process.env.SMTP2GO_FROM_NAME || 'ZING Website Forms';
@@ -102,6 +102,21 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
 
   if (email) {
     payload.custom_headers = [{ header: 'Reply-To', value: email }];
+  }
+
+  // File attachments (added 2026-08-26 for Fix A). SMTP2GO's v3 API takes
+  // attachments as base64 strings under the `attachments` field. Each item:
+  //   { filename, fileblob (base64), mimetype }
+  // We only support Buffer content in-process today — nodemailer-shaped
+  // { filename, content, contentType } objects come in from submit.js and
+  // are converted here so the two paths (SMTP2GO now / nodemailer someday)
+  // stay decoupled.
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    payload.attachments = attachments.map((a) => ({
+      filename: a.filename,
+      fileblob: Buffer.isBuffer(a.content) ? a.content.toString('base64') : String(a.content || ''),
+      mimetype: a.contentType || 'application/octet-stream',
+    }));
   }
 
   let lastError = null;
