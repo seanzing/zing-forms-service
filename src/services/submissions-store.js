@@ -47,6 +47,10 @@ function hashIp(ip, salt) {
  * @param {string|null} row.phone
  * @param {string|null} row.message
  * @param {object|null} row.extra
+ * @param {Array<{field:string, filename:string, mimetype:string, size:number}>|null} [row.attachments]
+ *   Metadata for uploaded files delivered as email attachments. Bytes
+ *   are NOT stored here — SMTP is the delivery layer. Added 2026-08-26
+ *   (Fix A). Backwards-compatible: the DB column defaults to NULL.
  * @param {boolean} row.email_sent
  * @param {string|null} row.email_error
  * @param {string|null} row.ip
@@ -70,6 +74,7 @@ async function insertSubmission(row) {
         phone: row.phone || null,
         message: row.message || null,
         extra: row.extra || null,
+        attachments: Array.isArray(row.attachments) && row.attachments.length > 0 ? row.attachments : null,
         email_sent: !!row.email_sent,
         email_error: row.email_error || null,
         ip_hash: hashIp(row.ip, process.env.IP_HASH_SALT),
@@ -104,7 +109,7 @@ async function listSubmissions(siteId, opts = {}) {
   let q = client
     .from('form_submissions')
     .select(
-      'id,site_id,form_type,submitted_at,name,email,phone,message,extra,email_sent,email_error',
+      'id,site_id,form_type,submitted_at,name,email,phone,message,extra,attachments,email_sent,email_error',
       { count: 'exact' },
     )
     .eq('site_id', siteId)
