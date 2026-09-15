@@ -94,6 +94,90 @@ describe('sendEmail — recipient formatting', () => {
     assert.doesNotMatch(JSON.stringify(lastPayload.to), /<|>/);
   });
 
+  // Per-form recipient routing (2026-09-15) — see resolveRecipient() in
+  // ../sites.js and supabase/migrations/20260915160000_sites_form_recipients.sql
+  // in zing-pixel-dashboard. Real motivating case: launchpoint-partners.com
+  // wants its Sales form and Careers form to notify different inboxes,
+  // both on the same site.
+  test('routes to site.formRecipients[form_type] when a per-form override exists', async () => {
+    const res = await sendEmail({
+      site: {
+        businessName: 'LaunchPoint Partners',
+        ownerEmail: 'owner@launchpoint-partners.com',
+        formRecipients: {
+          sales: 'sales@launchpoint-partners.com',
+          careers: 'hr@launchpoint-partners.com',
+        },
+      },
+      site_id: 'j9bk95xt',
+      name: 'Prospective Customer',
+      email: 'lead@example.com',
+      message: 'Interested in DGaaS',
+      form_type: 'sales',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['sales@launchpoint-partners.com']);
+  });
+
+  test('a DIFFERENT form_type on the same site routes to a DIFFERENT recipient', async () => {
+    const site = {
+      businessName: 'LaunchPoint Partners',
+      ownerEmail: 'owner@launchpoint-partners.com',
+      formRecipients: {
+        sales: 'sales@launchpoint-partners.com',
+        careers: 'hr@launchpoint-partners.com',
+      },
+    };
+    const salesRes = await sendEmail({
+      site,
+      site_id: 'j9bk95xt',
+      name: 'A',
+      message: 'sales inquiry',
+      form_type: 'sales',
+    });
+    const salesTo = [...lastPayload.to];
+    const careersRes = await sendEmail({
+      site,
+      site_id: 'j9bk95xt',
+      name: 'B',
+      message: 'job application',
+      form_type: 'careers',
+    });
+    assert.equal(salesRes.sent, true);
+    assert.equal(careersRes.sent, true);
+    assert.deepEqual(salesTo, ['sales@launchpoint-partners.com']);
+    assert.deepEqual(lastPayload.to, ['hr@launchpoint-partners.com']);
+    assert.notDeepEqual(salesTo, lastPayload.to);
+  });
+
+  test('falls back to ownerEmail for a form_type with no override, even when other form_types have one', async () => {
+    const res = await sendEmail({
+      site: {
+        businessName: 'LaunchPoint Partners',
+        ownerEmail: 'owner@launchpoint-partners.com',
+        formRecipients: { sales: 'sales@launchpoint-partners.com' },
+      },
+      site_id: 'j9bk95xt',
+      name: 'Site Visitor',
+      message: 'General question',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['owner@launchpoint-partners.com']);
+  });
+
+  test('sites with no formRecipients at all (100% of the fleet pre-2026-09-15) behave exactly as before', async () => {
+    const res = await sendEmail({
+      site: { businessName: 'Legacy Site', ownerEmail: 'owner@legacy.example' },
+      site_id: 'legacy1',
+      name: 'Someone',
+      message: 'Hi',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['owner@legacy.example']);
+  });
+
   test('REGRESSION: comma in businessName does not break the to: field', async () => {
     // The lkv363od bug: SMTP2GO 400'd because the comma split the entry.
     const res = await sendEmail({
