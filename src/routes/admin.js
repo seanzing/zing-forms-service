@@ -37,7 +37,7 @@ router.get('/sites/:siteId/submissions', async (req, res) => {
 router.post('/sites/:siteId', (req, res) => {
   try {
     const { siteId } = req.params;
-    const { businessName, ownerEmail, formTypes } = req.body;
+    const { businessName, ownerEmail, formTypes, formRecipients } = req.body;
 
     if (!businessName || !ownerEmail) {
       return res.status(400).json({ error: 'businessName and ownerEmail are required.' });
@@ -46,7 +46,12 @@ router.post('/sites/:siteId', (req, res) => {
     const siteConfig = {
       businessName,
       ownerEmail,
-      formTypes: formTypes || ['contact']
+      formTypes: formTypes || ['contact'],
+      // Optional per-form recipient override (legacy sites.json path — see
+      // resolveRecipient() in ../services/sites.js). Supabase-backed sites
+      // set this via the Pixel dashboard's "Form Recipients" section
+      // instead, which writes directly to sites.form_recipients.
+      formRecipients: (formRecipients && typeof formRecipients === 'object') ? formRecipients : {},
     };
 
     setSite(siteId, siteConfig);

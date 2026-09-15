@@ -1,3 +1,4 @@
+const { resolveRecipient } = require('./sites');
 const axios = require('axios');
 
 /**
@@ -93,6 +94,8 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
     </div>
   `;
 
+  const recipient = resolveRecipient(site, form_type);
+
   // SMTP2GO's `to:` field parses the entry as an RFC 5322 mailbox.
   // 'Display Name <email>' is valid in theory, but a display name with a
   // comma (e.g. 'You Mess Up, We Clean Up') gets split on the comma and
@@ -101,7 +104,7 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
   // in the subject + html body.
   const payload = {
     api_key: apiKey,
-    to: [site.ownerEmail],
+    to: [recipient],
     sender: `${fromName} <${fromEmail}>`,
     subject,
     html_body: htmlBody,

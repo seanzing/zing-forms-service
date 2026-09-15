@@ -95,7 +95,7 @@ async function getSite(siteId) {
     try {
       const { data, error } = await sb
         .from('sites')
-        .select('id, business_name, owner_email')
+        .select('id, business_name, owner_email, form_recipients')
         .eq('id', siteId)
         .maybeSingle();
 
@@ -103,6 +103,15 @@ async function getSite(siteId) {
         const config = {
           businessName: data.business_name || siteId,
           ownerEmail: data.owner_email,
+          // form_recipients is a jsonb column, {} by default (added
+          // 2026-09-15, see supabase/migrations/20260915160000_sites_form_recipients.sql
+          // in zing-pixel-dashboard). Maps a form_type (e.g. "sales",
+          // "careers") to a distinct recipient email for that form's
+          // submissions — resolveRecipient() below falls back to
+          // ownerEmail for any form_type not present in this map, which
+          // is every form_type on every site until an operator sets one
+          // via the Pixel dashboard's "Form Recipients" section.
+          formRecipients: (data.form_recipients && typeof data.form_recipients === 'object') ? data.form_recipients : {},
           formTypes: ['contact'],
           source: 'supabase',
         };
@@ -122,6 +131,20 @@ async function getSite(siteId) {
   }
 
   return null;
+}
+
+/**
+ * Resolve the email address a submission for `formType` should go to.
+ * Prefers site.formRecipients[formType] (per-form override); falls back
+ * to site.ownerEmail when formType isn't set, formRecipients is missing
+ * entirely (legacy sites.json entries, or Supabase rows predating the
+ * form_recipients column), or the mapped value is empty/falsy.
+ */
+function resolveRecipient(site, formType) {
+  const recipients = site && typeof site.formRecipients === 'object' ? site.formRecipients : null;
+  const key = formType || 'contact';
+  if (recipients && recipients[key]) return recipients[key];
+  return site ? site.ownerEmail : null;
 }
 
 /** Synchronous getSite for places that can't await (returns legacy only). */
@@ -150,4 +173,4 @@ function deleteSite(siteId) {
   return true;
 }
 
-module.exports = { getSite, getSiteSync, getSites, setSite, deleteSite };
+module.exports = { getSite, getSiteSync, getSites, setSite, deleteSite, resolveRecipient };
