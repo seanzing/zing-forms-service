@@ -85,8 +85,14 @@ function normalizeHumanLabels(body) {
   for (const key of Object.keys(body)) {
     if (typeof key !== 'string') continue;
     // Collapse internal whitespace and lowercase, but keep spaces so
-    // "Full  Name" and "Full name" both resolve.
-    const norm = key.toLowerCase().trim().replace(/\s+/g, ' ');
+    // "Full  Name" and "Full name" both resolve. Also fold hyphens and
+    // underscores to a single space so kebab-case field names like
+    // "first-name" (a real Claude Design export shape — California
+    // Gleaming Express Wash, 63tyj8lx, reported every quote-form
+    // submission 400ing with "name is required" because the alias map
+    // only had "first name"/"firstname", never "first-name") resolve the
+    // same as their space- and underscore-separated siblings.
+    const norm = key.toLowerCase().trim().replace(/[\s_-]+/g, ' ');
     const canonical = HUMAN_LABEL_ALIASES[norm];
     if (!canonical) continue;
     // Don't overwrite an already-set canonical value. Predictable precedence:
