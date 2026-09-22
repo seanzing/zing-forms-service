@@ -124,6 +124,30 @@ describe('validateSubmission — case-insensitive human labels', () => {
     assert.equal(r3.req.body.name, 'Dave');
     assert.equal(r3.req.body.email, 'd@d.com');
   });
+
+  test('kebab-case field names (first-name/last-name) resolve — real repro: California Gleaming Express Wash (63tyj8lx)', () => {
+    // Every quote-form submission on this live site 400'd with "name is
+    // required" — the Claude Design export used literal HTML name
+    // attributes "first-name" / "last-name" (hyphenated), which the alias
+    // map didn't recognize (it only had "first name" / "firstname").
+    const { req, nextCalled, statusCode, jsonPayload } = runMiddleware({
+      site_id: '63tyj8lx',
+      'first-name': 'Test',
+      'last-name': 'Diagnostic',
+      email: 't@t.com',
+      phone: '555',
+    });
+    assert.equal(nextCalled, true, `expected next(), got ${statusCode} ${JSON.stringify(jsonPayload)}`);
+    assert.equal(req.body.name, 'Test Diagnostic');
+  });
+
+  test('kebab-case single-word variants (e-mail, cell-phone) resolve', () => {
+    const r1 = runMiddleware({ site_id: 'x', name: 'Eve', 'e-mail': 'e@e.com' });
+    assert.equal(r1.req.body.email, 'e@e.com');
+
+    const r2 = runMiddleware({ site_id: 'x', name: 'Frank', 'cell-phone': '555-9999' });
+    assert.equal(r2.req.body.phone, '555-9999');
+  });
 });
 
 describe('validateSubmission — existing behavior (regression checks)', () => {
