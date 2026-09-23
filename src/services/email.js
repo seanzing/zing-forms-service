@@ -1,4 +1,4 @@
-const { resolveRecipient } = require('./sites');
+const { resolveRecipients } = require('./sites');
 const axios = require('axios');
 
 /**
@@ -94,17 +94,22 @@ async function sendEmail({ site, site_id, name, email, phone, message, form_type
     </div>
   `;
 
-  const recipient = resolveRecipient(site, form_type);
+  const recipients = resolveRecipients(site, form_type);
+  if (recipients.length === 0) {
+    return { sent: false, error: 'No recipient configured for this form.', attempts: 0 };
+  }
 
-  // SMTP2GO's `to:` field parses the entry as an RFC 5322 mailbox.
-  // 'Display Name <email>' is valid in theory, but a display name with a
-  // comma (e.g. 'You Mess Up, We Clean Up') gets split on the comma and
-  // treated as multiple recipients → 400 "no angle-addr". Diagnosed
-  // 2026-06-29 (site lkv363od). Ship the bare email; the businessName is
-  // in the subject + html body.
+  // SMTP2GO's `to:` field takes an array — each entry is its own distinct
+  // mailbox. A single string entry containing a raw comma (e.g. a display
+  // name like 'You Mess Up, We Clean Up') would get mis-split into extra
+  // "recipients" and 400 with "no angle-addr" — diagnosed 2026-06-29 (site
+  // lkv363od) — so we ship bare emails only, one array element per intended
+  // recipient. Multi-recipient support (2026-09-23): resolveRecipients()
+  // already splits a comma-separated formRecipients value into a clean
+  // array of trimmed addresses, so `to` naturally fans out to all of them.
   const payload = {
     api_key: apiKey,
-    to: [recipient],
+    to: recipients,
     sender: `${fromName} <${fromEmail}>`,
     subject,
     html_body: htmlBody,

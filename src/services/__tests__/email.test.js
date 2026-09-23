@@ -150,6 +150,74 @@ describe('sendEmail — recipient formatting', () => {
     assert.notDeepEqual(salesTo, lastPayload.to);
   });
 
+  // Multi-recipient (2026-09-23) — real request: same form, multiple
+  // inboxes (NOT different forms to different inboxes, which formRecipients
+  // already covers). A single form_type's value can be a comma-separated
+  // list of addresses; sendEmail fans the SMTP2GO `to:` array out to all
+  // of them in one send (one email, multiple To: recipients — not N
+  // separate sends).
+  test('multi-recipient: a comma-separated formRecipients value sends to all addresses in one email', async () => {
+    const res = await sendEmail({
+      site: {
+        businessName: 'Multi-Recipient Biz',
+        ownerEmail: 'owner@biz.com',
+        formRecipients: { sales: 'sales@biz.com, manager@biz.com, owner2@biz.com' },
+      },
+      site_id: 'multi1',
+      name: 'Lead',
+      email: 'lead@example.com',
+      message: 'Interested',
+      form_type: 'sales',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['sales@biz.com', 'manager@biz.com', 'owner2@biz.com']);
+  });
+
+  test('multi-recipient: a comma-separated ownerEmail (no per-form override) also fans out', async () => {
+    const res = await sendEmail({
+      site: {
+        businessName: 'Multi-Recipient Biz',
+        ownerEmail: 'owner@biz.com, backup@biz.com',
+      },
+      site_id: 'multi2',
+      name: 'Lead',
+      message: 'General inquiry',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['owner@biz.com', 'backup@biz.com']);
+  });
+
+  test('multi-recipient list is trimmed and de-blanked, still passes the no-angle-addr regression guard', async () => {
+    const res = await sendEmail({
+      site: {
+        businessName: 'Multi-Recipient Biz',
+        ownerEmail: 'owner@biz.com',
+        formRecipients: { sales: ' sales@biz.com ,  manager@biz.com,, ' },
+      },
+      site_id: 'multi3',
+      name: 'Lead',
+      message: 'Interested',
+      form_type: 'sales',
+    });
+    assert.equal(res.sent, true);
+    assert.deepEqual(lastPayload.to, ['sales@biz.com', 'manager@biz.com']);
+    assert.doesNotMatch(JSON.stringify(lastPayload.to), /<|>/);
+  });
+
+  test('no recipient configured at all → sendEmail returns sent:false without calling SMTP2GO', async () => {
+    const res = await sendEmail({
+      site: { businessName: 'No Recipient Biz', ownerEmail: '' },
+      site_id: 'norecip1',
+      name: 'Lead',
+      message: 'Hello',
+      form_type: 'contact',
+    });
+    assert.equal(res.sent, false);
+    assert.match(res.error, /no recipient/i);
+    assert.equal(lastPayload, null, 'SMTP2GO should never be called with an empty to: list');
+  });
+
   test('falls back to ownerEmail for a form_type with no override, even when other form_types have one', async () => {
     const res = await sendEmail({
       site: {

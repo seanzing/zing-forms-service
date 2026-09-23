@@ -16,7 +16,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveRecipient } = require('../sites');
+const { resolveRecipient, resolveRecipients } = require('../sites');
 
 describe('resolveRecipient', () => {
   test('returns the per-form override when formRecipients has a matching key', () => {
@@ -73,5 +73,44 @@ describe('resolveRecipient', () => {
   test('ignores a non-object formRecipients (defensive) and falls back to ownerEmail', () => {
     const site = { ownerEmail: 'owner@biz.com', formRecipients: 'not-an-object' };
     assert.equal(resolveRecipient(site, 'sales'), 'owner@biz.com');
+  });
+});
+
+describe('resolveRecipients (multi-recipient, 2026-09-23)', () => {
+  test('a comma-separated formRecipients value splits into multiple trimmed addresses', () => {
+    const site = {
+      ownerEmail: 'owner@biz.com',
+      formRecipients: { sales: 'sales@biz.com, manager@biz.com,  owner2@biz.com ' },
+    };
+    assert.deepEqual(resolveRecipients(site, 'sales'), [
+      'sales@biz.com',
+      'manager@biz.com',
+      'owner2@biz.com',
+    ]);
+  });
+
+  test('a single (no-comma) formRecipients value returns a 1-element array', () => {
+    const site = { ownerEmail: 'owner@biz.com', formRecipients: { sales: 'sales@biz.com' } };
+    assert.deepEqual(resolveRecipients(site, 'sales'), ['sales@biz.com']);
+  });
+
+  test('a comma-separated ownerEmail (fallback path) also splits into multiple addresses', () => {
+    const site = { ownerEmail: 'owner@biz.com, backup@biz.com' };
+    assert.deepEqual(resolveRecipients(site, 'contact'), ['owner@biz.com', 'backup@biz.com']);
+  });
+
+  test('trailing/leading commas and empty segments are dropped, not returned as blank entries', () => {
+    const site = { ownerEmail: 'owner@biz.com', formRecipients: { sales: 'a@biz.com,,b@biz.com,' } };
+    assert.deepEqual(resolveRecipients(site, 'sales'), ['a@biz.com', 'b@biz.com']);
+  });
+
+  test('no recipient configured anywhere → empty array (not null, not throw)', () => {
+    assert.deepEqual(resolveRecipients(null, 'sales'), []);
+    assert.deepEqual(resolveRecipients({}, 'sales'), []);
+  });
+
+  test('resolveRecipient (singular, deprecated) still returns just the first address for back-compat', () => {
+    const site = { ownerEmail: 'owner@biz.com', formRecipients: { sales: 'sales@biz.com, manager@biz.com' } };
+    assert.equal(resolveRecipient(site, 'sales'), 'sales@biz.com');
   });
 });

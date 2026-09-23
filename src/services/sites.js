@@ -134,17 +134,33 @@ async function getSite(siteId) {
 }
 
 /**
- * Resolve the email address a submission for `formType` should go to.
+ * Resolve the email address(es) a submission for `formType` should go to.
  * Prefers site.formRecipients[formType] (per-form override); falls back
  * to site.ownerEmail when formType isn't set, formRecipients is missing
  * entirely (legacy sites.json entries, or Supabase rows predating the
  * form_recipients column), or the mapped value is empty/falsy.
+ *
+ * Supports multiple recipients for a single form_type: store a
+ * comma-separated list in the same string field (e.g.
+ * "sales@x.com, manager@x.com") — no schema change needed. Returns an
+ * array of trimmed, non-empty email addresses (always at least one
+ * entry when a recipient exists, empty array when none does).
  */
-function resolveRecipient(site, formType) {
+function resolveRecipients(site, formType) {
   const recipients = site && typeof site.formRecipients === 'object' ? site.formRecipients : null;
   const key = formType || 'contact';
-  if (recipients && recipients[key]) return recipients[key];
-  return site ? site.ownerEmail : null;
+  const raw = (recipients && recipients[key]) || (site ? site.ownerEmail : null);
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+}
+
+/** @deprecated use resolveRecipients — kept for any external callers/tests during migration. */
+function resolveRecipient(site, formType) {
+  const all = resolveRecipients(site, formType);
+  return all.length ? all[0] : null;
 }
 
 /** Synchronous getSite for places that can't await (returns legacy only). */
@@ -173,4 +189,4 @@ function deleteSite(siteId) {
   return true;
 }
 
-module.exports = { getSite, getSiteSync, getSites, setSite, deleteSite, resolveRecipient };
+module.exports = { getSite, getSiteSync, getSites, setSite, deleteSite, resolveRecipient, resolveRecipients };
