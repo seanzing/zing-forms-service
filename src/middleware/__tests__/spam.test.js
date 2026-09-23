@@ -125,7 +125,20 @@ describe('validateSubmission — case-insensitive human labels', () => {
     assert.equal(r3.req.body.email, 'd@d.com');
   });
 
-  test('kebab-case field names (first-name/last-name) resolve — real repro: California Gleaming Express Wash (63tyj8lx)', () => {
+  test('bare first / last (real repro: Ten4, ptceevj3 — sales/support/billing/savings forms)', () => {
+    const { req, nextCalled, statusCode } = runMiddleware({
+      site_id: 'ptceevj3',
+      first: 'Test',
+      last: 'Diagnostic',
+      email: 't@t.com',
+      phone: '5551234567',
+    });
+    assert.equal(nextCalled, true, 'next() should be called');
+    assert.equal(statusCode, 200);
+    assert.equal(req.body.name, 'Test Diagnostic');
+  });
+
+  test('kebab-case with hyphens: first-name / last-name (real repro: California Gleaming Express Wash, 63tyj8lx)', () => {
     // Every quote-form submission on this live site 400'd with "name is
     // required" — the Claude Design export used literal HTML name
     // attributes "first-name" / "last-name" (hyphenated), which the alias

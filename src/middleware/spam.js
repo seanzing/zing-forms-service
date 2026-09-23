@@ -51,8 +51,10 @@ const HUMAN_LABEL_ALIASES = {
   // first / last
   'first name': 'first_name',
   'firstname': 'first_name',
+  'first': 'first_name',
   'last name': 'last_name',
   'lastname': 'last_name',
+  'last': 'last_name',
   // email
   'email': 'email',
   'email address': 'email',
