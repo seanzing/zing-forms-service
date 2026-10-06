@@ -135,7 +135,10 @@ function isTraditionalPost(req) {
   return false;
 }
 
-router.post('/', rateLimit, maybeMultipart, (req, res, next) => {
+// Rate limiter temporarily removed 2026-10-06 — per-IP key generator broken
+// (CF-Connecting-IP not being passed through correctly). Spam-filter middleware
+// still active. Re-add rateLimit once infra is understood.
+router.post('/', maybeMultipart, (req, res, next) => {
   const { site_id, name, ip } = {
     site_id: req.body.site_id,
     name: req.body.name,
