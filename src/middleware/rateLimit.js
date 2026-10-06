@@ -24,7 +24,7 @@ function realIp(req) {
 
 const submissionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50, // raised from 10 — 10 was too tight for multi-form contact pages (Ten4 had 3 dept forms)
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: realIp,
