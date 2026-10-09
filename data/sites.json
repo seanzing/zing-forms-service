@@ -2,6 +2,25 @@
   "mooreroofing": {
     "businessName": "Moore Roofing & Designs Inc.",
     "ownerEmail": "",
-    "formTypes": ["contact", "quote"]
+    "formTypes": [
+      "contact",
+      "quote"
+    ]
+  },
+  "channelvelocity": {
+    "businessName": "Channel Velocity",
+    "ownerEmail": "sales@channelvelocity.app",
+    "formTypes": [
+      "contact"
+    ],
+    "formRecipients": {}
+  },
+  "alliancevelocity": {
+    "businessName": "Alliance Velocity",
+    "ownerEmail": "sales@alliancevelocity.app",
+    "formTypes": [
+      "contact"
+    ],
+    "formRecipients": {}
   }
 }
