@@ -1,6 +1,37 @@
+// Log failed/blocked submissions so they're visible in the Pixel Forms tab
+// and can be caught by fleet monitoring. Non-fatal — never blocks the response.
+// Imported lazily (require inside function) to avoid circular-module issues
+// when tests stub insertSubmission before requiring this module.
+function logFailedSubmission(req, reason) {
+  try {
+    const { insertSubmission } = require('../services/submissions-store');
+    const { site_id, name, email, phone, message } = req.body || {};
+    // Capture the raw field names sent by the browser — the primary debug
+    // signal for "wrong field names" failures (e.g. cn/ce/cp instead of
+    // name/email/phone). Don't log values for honeypot hits (could contain
+    // spam/injection payloads we don't want persisted).
+    const isHoneypot = reason.startsWith('spam:');
+    const rawFields = isHoneypot ? null : { raw_field_names: Object.keys(req.body || {}).join(', ') };
+    insertSubmission({
+      site_id: site_id || '(unknown)',
+      form_type: (req.body || {}).form_type || 'contact',
+      name: isHoneypot ? null : (name || null),
+      email: isHoneypot ? null : (email || null),
+      phone: isHoneypot ? null : (phone || null),
+      message: isHoneypot ? null : (message || null),
+      extra: rawFields,
+      email_sent: false,
+      email_error: reason,
+      ip: req.ip,
+      user_agent: req.headers && req.headers['user-agent'] || null,
+    }).catch(() => {}); // fire-and-forget — never crash the middleware
+  } catch (_) {}
+}
+
 function checkHoneypot(req, res, next) {
   if (req.body.website && String(req.body.website).trim() !== '') {
     console.log(`[SPAM] Honeypot triggered ip=${req.ip}`);
+    logFailedSubmission(req, 'spam:honeypot');
     return res.json({ success: true, message: "Thanks! We'll be in touch soon." });
   }
   next();
@@ -48,6 +79,11 @@ const HUMAN_LABEL_ALIASES = {
   'fullname': 'name',
   'your name': 'name',
   'yourname': 'name',
+  // abbreviated / designer shorthand → name
+  // (cn = "customer name" — real repro: Alvarado's Drywall c4owsllv 2026-10-09)
+  'cn': 'name',
+  'fn': 'name',       // "full name" abbreviation
+  'nm': 'name',
   // first / last
   'first name': 'first_name',
   'firstname': 'first_name',
@@ -55,13 +91,16 @@ const HUMAN_LABEL_ALIASES = {
   'last name': 'last_name',
   'lastname': 'last_name',
   'last': 'last_name',
-  // email
+  // email — including common designer abbreviations
   'email': 'email',
   'email address': 'email',
   'emailaddress': 'email',
   'e-mail': 'email',
   'e mail': 'email',
-  // phone
+  'ce': 'email',      // "customer email" — real repro: Alvarado's Drywall
+  'em': 'email',
+  'mail': 'email',
+  // phone — including common designer abbreviations
   'phone': 'phone',
   'phone number': 'phone',
   'phonenumber': 'phone',
@@ -70,13 +109,23 @@ const HUMAN_LABEL_ALIASES = {
   'mobile number': 'phone',
   'cell': 'phone',
   'cell phone': 'phone',
-  // message
+  'cp': 'phone',      // "customer phone" — real repro: Alvarado's Drywall
+  'ph': 'phone',
+  'tel': 'phone',
+  // message — including common designer abbreviations
   'message': 'message',
   'comments': 'message',
   'comment': 'message',
   'notes': 'message',
   'how can we help': 'message',
   'how can we help you': 'message',
+  'cm': 'message',    // "customer message" — real repro: Alvarado's Drywall
+  'msg': 'message',
+  'details': 'message',
+  'description': 'message',
+  'project details': 'message',
+  'project description': 'message',
+  'tell us more': 'message',
   // subject
   'subject': 'subject',
 };
@@ -131,14 +180,17 @@ function validateSubmission(req, res, next) {
   if (name) req.body.name = String(name).trim();
 
   if (!site_id) {
+    logFailedSubmission(req, 'validation:site_id is required');
     return res.status(400).json({ error: 'site_id is required.' });
   }
 
   if (!req.body.name || req.body.name === '') {
+    logFailedSubmission(req, 'validation:name is required — raw fields: ' + Object.keys(req.body).join(', '));
     return res.status(400).json({ error: 'name is required.' });
   }
 
   if ((!email || String(email).trim() === '') && (!phone || String(phone).trim() === '')) {
+    logFailedSubmission(req, 'validation:email or phone is required');
     return res.status(400).json({ error: 'At least one of email or phone is required.' });
   }
 

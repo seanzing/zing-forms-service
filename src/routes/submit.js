@@ -145,10 +145,21 @@ router.post('/', maybeMultipart, (req, res, next) => {
     ip: req.ip
   };
   const fileCount = Array.isArray(req.files) ? req.files.length : 0;
-  console.log(`[SUBMIT] site_id=${site_id} ip=${ip} files=${fileCount} time=${new Date().toISOString()}`);
+  const isTest = req.query._test === '1';
+  console.log(`[SUBMIT] site_id=${site_id} ip=${ip} files=${fileCount} test=${isTest} time=${new Date().toISOString()}`);
   next();
 }, checkHoneypot, validateSubmission, async (req, res) => {
   const traditional = isTraditionalPost(req);
+
+  // ── Test mode ────────────────────────────────────────────────────────────
+  // POST /submit?_test=1 validates the submission shape (honeypot + field
+  // validation run above) but skips email send and Supabase insert. Used by
+  // the publish pipeline's form smoke-test so it can verify a form is wired
+  // correctly without delivering a real email to the site owner or creating a
+  // fake submission row. Returns { success:true, test:true } on a valid shape.
+  if (req.query._test === '1') {
+    return res.json({ success: true, test: true, message: 'Form shape is valid (test mode — no email sent).' });
+  }
   try {
     const { site_id, name, email, phone, message, form_type = 'contact' } = req.body;
     // Extract once so the notification email + durable store see the
@@ -181,6 +192,19 @@ router.post('/', maybeMultipart, (req, res, next) => {
     // If no owner email configured, log and accept silently — don't send to a wrong address
     if (!site.ownerEmail) {
       console.log(`[SUBMIT] result=no_owner_email site_id=${site_id} — submission logged only`);
+      insertSubmission({
+        site_id,
+        form_type,
+        name,
+        email,
+        phone,
+        message,
+        extra: extras,
+        email_sent: false,
+        email_error: 'no_owner_email: site has no recipient configured in Pixel',
+        ip: req.ip,
+        user_agent: req.headers['user-agent'] || null,
+      }).catch((err) => console.error('[SUBMIT] insertSubmission (no_owner_email) failed:', err.message));
       try {
         fs.appendFileSync(logFile, JSON.stringify({
           timestamp: new Date().toISOString(),
