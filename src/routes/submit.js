@@ -90,7 +90,14 @@ function buildAttachments(reqFiles) {
   }));
   const extrasSummary = {};
   for (const f of files) {
-    extrasSummary[f.fieldname] = `${f.originalname} (${humanFileSize(f.size)})`;
+    // Multiple files can share the same field name (e.g. damage-photos with
+    // multiple=true). Accumulate into an array so all filenames appear in
+    // the email body summary — not just the last one.
+    if (extrasSummary[f.fieldname]) {
+      extrasSummary[f.fieldname] += `, ${f.originalname} (${humanFileSize(f.size)})`;
+    } else {
+      extrasSummary[f.fieldname] = `${f.originalname} (${humanFileSize(f.size)})`;
+    }
   }
   return { attachments, attachmentsMeta, extrasSummary };
 }

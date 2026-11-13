@@ -50,8 +50,8 @@ const ALLOWED = new Map([
   ['mov', ['video/quicktime']],
 ]);
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per file
-const MAX_FILES = 5;                     // 5 files per submission
+const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB per file (matches site copy)
+const MAX_FILES = 10;                    // 10 files per submission (matches site copy)
 
 function fileFilter(_req, file, cb) {
   const ext = path.extname(file.originalname || '').toLowerCase().replace(/^\./, '');
