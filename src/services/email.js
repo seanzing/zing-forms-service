@@ -236,6 +236,34 @@ function formatValueHtml(value) {
   if (typeof value === 'object') {
     // Skip empty objects (e.g. the file-upload placeholder `scope: {}`).
     if (Object.keys(value).length === 0) return null;
+
+    // Attribution object — shape: { first: { page, referrerHost, campaign: {...} }, latest: { ... } }
+    // Render as a compact human-readable summary instead of a raw JSON dump.
+    if ((value.first || value.latest) && typeof (value.first || value.latest) === 'object') {
+      const lines = [];
+      for (const slot of ['first', 'latest']) {
+        const touch = value[slot];
+        if (!touch || typeof touch !== 'object') continue;
+        const parts = [];
+        if (touch.referrerHost) parts.push(`from ${touch.referrerHost}`);
+        const camp = touch.campaign;
+        if (camp && typeof camp === 'object' && Object.keys(camp).length > 0) {
+          const c = [];
+          if (camp.source) c.push(`source: ${camp.source}`);
+          if (camp.medium) c.push(`medium: ${camp.medium}`);
+          if (camp.campaign || camp.name) c.push(`campaign: ${camp.campaign || camp.name}`);
+          if (camp.term) c.push(`term: ${camp.term}`);
+          if (c.length) parts.push(c.join(', '));
+        }
+        if (touch.page && touch.page !== '/') parts.push(`page: ${touch.page}`);
+        if (parts.length) {
+          lines.push(`${slot.charAt(0).toUpperCase() + slot.slice(1)}: ${parts.join(' · ')}`);
+        }
+      }
+      if (lines.length === 0) return null;
+      return escapeHtml(lines.join('\n'));
+    }
+
     return `<pre style="margin: 0; font-family: Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap;">${escapeHtml(
       JSON.stringify(value, null, 2),
     )}</pre>`;
