@@ -606,6 +606,29 @@ describe('sendEmail — human question labels (Fix B, 2026-08-26)', () => {
     assert.match(html, />Yes</);
   });
 
+  test('formatValueHtml renders attribution object as human-readable summary', () => {
+    const attribution = {
+      first: { page: '/', referrerHost: 'www.google.com', campaign: {} },
+      latest: { page: '/contact', referrerHost: 'www.google.com', campaign: { source: 'google', medium: 'cpc', campaign: 'spring-sale' } },
+    };
+    const html = _internals.formatValueHtml(attribution);
+    // Should NOT contain raw JSON
+    assert.doesNotMatch(html, /\{/);
+    assert.doesNotMatch(html, /referrerHost/);
+    // Should contain human-readable parts
+    assert.match(html, /First/);
+    assert.match(html, /www\.google\.com/);
+    assert.match(html, /Latest/);
+    assert.match(html, /source: google/);
+    assert.match(html, /medium: cpc/);
+    assert.match(html, /page: \/contact/);
+  });
+
+  test('formatValueHtml returns null for attribution with no useful data', () => {
+    const empty = { first: { page: '/', referrerHost: '', campaign: {} }, latest: { page: '/', referrerHost: '', campaign: {} } };
+    assert.equal(_internals.formatValueHtml(empty), null);
+  });
+
   test('renderExtras with a bogus labels arg (array / string / null) ignores it gracefully', () => {
     // Defensive: same call shape as pre-Fix-B — no crash.
     const nullHtml = _internals.renderExtras({ 'q-cdl': 'Yes' }, null);
