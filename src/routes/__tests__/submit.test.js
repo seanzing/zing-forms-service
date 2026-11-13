@@ -398,8 +398,8 @@ describe('POST /submit — multipart path (Fix A: file uploads)', () => {
     assert.equal(lastSmtpPayload, null);
   });
 
-  test('rejects files that exceed the 10 MB limit', async () => {
-    const bigBuf = Buffer.alloc(11 * 1024 * 1024, 0); // 11 MB
+  test('rejects files that exceed the 20 MB limit', async () => {
+    const bigBuf = Buffer.alloc(21 * 1024 * 1024, 0); // 21 MB
     const res = await requestMultipart([
       { name: 'site_id', value: 's1' },
       { name: 'name', value: 'Jane' },
@@ -413,7 +413,7 @@ describe('POST /submit — multipart path (Fix A: file uploads)', () => {
     ]);
 
     assert.equal(res.status, 400);
-    assert.match(res.json.error, /10 MB|exceed|limit/i);
+    assert.match(res.json.error, /20 MB|exceed|limit/i);
     assert.equal(lastSmtpPayload, null);
   });
 
